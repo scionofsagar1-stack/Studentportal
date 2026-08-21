@@ -1659,6 +1659,37 @@ function computeStudentDueTillCurrentMonth(sheet) {
   });
   return { total, items, passbookMode: false };
 }
+/* Same due calculation as computeStudentDueTillCurrentMonth above, but the
+   line items come back GROUPED the same way the admin's Generate Bill /
+   Message Preview groups them (via groupFeeChartBillItems) — e.g. four
+   separate "May Fee", "June Fee", "July Fee", "August Fee" rows collapse
+   into one line "May to August Fee   ₹500 × 4 = ₹2,000". Used on the
+   Student Portal's public lookup screen so a student with many months
+   pending (or several fee heads) still gets a short, scannable summary
+   instead of a long stack of individual rows. */
+function computeStudentDueTillCurrentMonthGrouped(sheet) {
+  if (sheet.passbookMode) return computeStudentDueTillCurrentMonth(sheet);
+  const amountColIdx = getFeeChartAmountColIndex(sheet);
+  const monthColIdx = getFeeChartMonthColIndex(sheet);
+  const curIdx = getCurrentSessionMonthIndex();
+  const statuses = sheet.statuses || [];
+  const rawItems = [];
+  let total = 0;
+  (sheet.rows || []).forEach((row, ri) => {
+    if (SETTLED_STATUSES.includes(statuses[ri])) return;
+    const mi = getFeeChartRowMonthIndex(sheet, ri);
+    if (mi !== -1 && mi > curIdx) return; // future month — not due yet
+    const amt = feeChartRowAmount(sheet, ri, amountColIdx);
+    if (amt <= 0) return;
+    const detail = feeChartRowDetail(sheet, ri, amountColIdx);
+    const head = feeChartRowHead(sheet, ri, amountColIdx, monthColIdx);
+    const month = feeChartRowMonth(sheet, ri, monthColIdx);
+    rawItems.push({ ri, detail, amount: amt, status: statuses[ri] || "", head, month });
+    total += amt;
+  });
+  const items = groupFeeChartBillItems(rawItems);
+  return { total, items, passbookMode: false };
+}
 /* In a passbook, as soon as anything is typed in the last (bottom-most)
    row, a new blank row is automatically added below it — so you never have
    to manually press "+ Add Row" while entering data, just like a real bank
@@ -11282,7 +11313,7 @@ function renderStudentLookupResults() {
   resultsEl.innerHTML = studentLookupEntries.map(e => {
     const sheet = normalizeFeeSheet(e.feeChart);
     const hasRows = sheet.rows && sheet.rows.length && sheet.rows.some(r => r.some(v => (v || "").toString().trim()));
-    const due = hasRows ? computeStudentDueTillCurrentMonth(sheet) : { total: 0, items: [], passbookMode: false };
+    const due = hasRows ? computeStudentDueTillCurrentMonthGrouped(sheet) : { total: 0, items: [], passbookMode: false };
     combinedTotal += due.total;
     return `
       <div style="background:#F3ECDA;border:1px solid #D9CBA3;border-radius:4px;padding:12px;margin-top:10px;text-align:left;">
@@ -11302,7 +11333,7 @@ function renderStudentLookupResults() {
             : (due.passbookMode
                 ? `<div style="font-size:11px;color:#6B5F4B;font-style:italic;">${T("As per Passbook balance")}</div>`
                 : (due.items.length
-                    ? due.items.map(it => `<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:2px 0;"><span style="color:#1F2A44;">${escapeHtml(it.label)}</span><span style="color:#9B3437;font-weight:600;white-space:nowrap;">${fmtINR(it.amount)}</span></div>`).join("")
+                    ? due.items.map(it => `<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:2px 0;"><span style="color:#1F2A44;">${escapeHtml(it.detail)}</span><span style="color:#9B3437;font-weight:600;white-space:nowrap;">${it.isGroup ? `${fmtINR(it.unitAmount)} × ${it.count} = ${fmtINR(it.total)}` : fmtINR(it.total)}</span></div>`).join("")
                     : `<p style="font-size:12px;color:#1E7A3E;margin:0;">${T("No dues till this month.")}</p>`))}
           ${hasRows ? `<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;font-weight:700;margin-top:6px;padding-top:6px;border-top:1px solid #D9CBA3;">
             <span style="color:#1F2A44;">${T("Total Due")}</span>
